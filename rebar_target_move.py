@@ -12,5 +12,5 @@ for i in range(100):
     rep = {'action': np.array([0.0, 1.88, 0.0])}  # i / 100 * 1.05
      # min(0.2, i / 50) * 3.14   0* 3.14
     socket.send_pyobj(rep)
-    reply = socket.recv_pyobj() 
+    reply = socket.recv_pyobj()
     # print("Received reply:", reply)
