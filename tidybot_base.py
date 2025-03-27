@@ -9,7 +9,6 @@ from rebar_scripts.pose_estimation.slot_detector.detect_aurco import ArUcoDetect
 
 class Tidybot2:
     def __init__(self):
-
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REQ)
         # Suppose the remote server has IP 192.168.1.123, port 6666
@@ -31,23 +30,30 @@ class Tidybot2:
             if (
                     np.max(
                         np.abs(
-                            np.array(reply.current_pose) # TODO: figure out how to get the current pose
+                            np.array(reply["base_pose"]) # TODO: figure out how to get the current pose
                             - np.array(target_pose)
                         )
                     )
-                    < 0.01  # org 1e-3
+                    < 0.001  # org 1e-3
             ):
                 break
-
-    def detect_marker(self, target="desk", id=0):
+    def detect_marker(self, target="Desk", id=0):
         target_marker_id = self.marker_cfg[target][id]
+        intrinsics = {
+            "fx": self.marker_cfg["cam_intrinsics"]["fx"],
+            "fy": self.marker_cfg["cam_intrinsics"]["fy"],
+            "cx": self.marker_cfg["cam_intrinsics"]["cx"],
+            "cy": self.marker_cfg["cam_intrinsics"]["cy"]
+        }
+        tag_size = self.marker_cfg["tag_size"]
         self.obs_processor.get_real_robot_img_obs()
         obs = self.obs_processor.obs
-        if target=="desk":
-            rgb_frame = obs["webcam_5"]
-        else:
-            rgb_frame = obs["webcam_6"]
-        results, _ = self.ArUcoDetector.detect(rgb_frame)
+        rgb_frame = obs["agentview5_rgb"]
+        # if target=="Desk":
+        #     rgb_frame = obs["agentview5"]
+        # else:
+        #     rgb_frame = obs["webcam_6"]
+        results, _ = self.ArUcoDetector.detect(rgb_frame, img_idx=0, intrinsics=intrinsics, tag_size=tag_size)
         marker_pose_R = None
         marker_pose_t = None
         for marker in results:
@@ -73,11 +79,11 @@ class Tidybot2:
 
         # marker_in_base = cam_in_base_mat @ marker_pose_mat
         # target_in_base = cam_in_base_mat @ target_pose_mat
-        # diff  = target_in_base @ np.linalg.inv(marker_in_base)
+        # diff  = marker_in_base @ np.linalg.inv(target_in_base)
         diff_in_base = (
                 cam_in_base_mat
-                @ target_pose_mat
-                @ np.linalg.inv(marker_pose_mat)
+                @ marker_pose_mat
+                @ np.linalg.inv(target_pose_mat)
                 @ np.linalg.inv(cam_in_base_mat)
         )
         dx = diff_in_base[0, 3]
@@ -90,7 +96,14 @@ class Tidybot2:
 
     def move_to_marker(self, target="Desk", id=0):
         """10 HZ close loop control"""
+        zmq_init = False
         while True:
+            if not zmq_init:
+                rep = {'action': None}
+                self.socket.send_pyobj(rep)
+                reply = self.socket.recv_pyobj()
+                state = np.array(reply["base_pose"])
+                zmq_init = True
             # Default: abs target pose, local frame
             close_loop_start_time = time.time()
             marker_detect_start = time.time()
@@ -98,29 +111,30 @@ class Tidybot2:
 
             cam_in_base_mat = np.array(self.marker_cfg["cam_in_base"][target])
             target_pose_mat = np.array(self.marker_cfg["target_rel_pose"][target])
-            action = self.get_base_action(cam_in_base_mat, marker_pose_mat, target_pose_mat)
+            action = self.get_base_action(cam_in_base_mat, marker_pose_mat, target_pose_mat) #TODO: calibrate the cam
 
-            rep = {'action': action}
+            rep = {'action': action + state}
             self.socket.send_pyobj(rep)
-            reply = self.socket.recv_pyobj()
 
             print("marker detection per frame:", time.time() - marker_detect_start)
+            print("np.array(action):", np.array(action))
+
+            if time.time() - close_loop_start_time < 0.1: # HACK 10 HZ
+                time.sleep(time.time() - close_loop_start_time)
+
+            reply = self.socket.recv_pyobj()
+            state = np.array(reply["base_pose"])
 
             if (
                     np.max(
                         np.abs(
-                            np.array(reply.current_pose)  # TODO: figure out how to get the current pose
-                            - np.array(target_pose)
+                            np.array(action)
                         )
                     )
-                    < 0.01  # org 1e-3
+                    < 0.005  # org 1e-3
             ):
+
                 break
-
-            if time.time() - close_loop_start_time < 0.01: # HACK 10 HZ
-                time.sleep(time.time() - close_loop_start_time)
-
-
 
 if __name__ == "__main__":
     base = Tidybot2()

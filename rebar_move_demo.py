@@ -28,8 +28,9 @@ def main():
             # 3. Execute action if provided
             if action is not None:
                 base.execute_action({'base_pose': np.array(action)})
-                
                 print("Executed action:", action)
+            else:
+                pass
             robot_state = socket.send_pyobj(base.get_state())
             print(base.get_state())
             time.sleep(POLICY_CONTROL_PERIOD) # Note: Not precise
